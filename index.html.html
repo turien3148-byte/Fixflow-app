@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fix-Flow | แจ้งปัญหา (v14.0 Production)</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        :root { /* ... (CSS ทั้งหมดจาก v13.1) ... */ }
+        /* (CSS ทั้งหมดจาก v13.1 อยู่ตรงนี้) */
+    </style>
+</head>
+<body>
+<div id="app">
+    </div>
+<script>
+    const { createApp, ref, reactive, computed } = Vue;
+    const { createClient } = supabase;
+
+    // --- Developer ต้องกรอกข้อมูลนี้ ---
+    const SUPABASE_URL = 'https://wcgcjganvyyyaiaordyc.supabase.co'; // ใส่ URL ของ Supabase ที่นี่
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndjZ2NqZ2Fudnl5eWFpYW9yZHljIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjIxNjQxMDcsImV4cCI6MjA3Nzc0MDEwN30.r6izWCmfPCeIt0U4429DnzBiPsZFjSR8YJB--OlDBUU'; // ใส่ Key ของ Supabase ที่นี่
+    // ---------------------------------
+    
+    if (SUPABASE_URL === 'https://wcgcjganvyyyaiaordyc.supabase.co') {
+        alert('Developer: กรุณาตั้งค่า SUPABASE_URL และ SUPABASE_KEY ในไฟล์ reporter-v14.html');
+    }
+    const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    const App = {
+        setup() {
+            const state = reactive({
+                currentScreen: 'form',
+                lastCreatedTicketId: null,
+                trackingIdInput: '',
+                trackedTicket: null,
+                form: { floor: '', zone: '', location_details: '', category: 'อื่นๆ', description: '', problemImageUrl: null },
+                uploading: false,
+                file: null
+            });
+
+            const handleImageUpload = (event) => {
+                state.file = event.target.files[0];
+                if (state.file) {
+                    if (state.file.size > 2 * 1024 * 1024) { // 2MB Limit
+                        alert('ไฟล์จำกัด 2MB'); state.file = null; event.target.value = null;
+                        state.form.problemImageUrl = null;
+                        return;
+                    }
+                    state.form.problemImageUrl = URL.createObjectURL(state.file); // Show local preview
+                }
+            };
+
+            const submitTicket = async () => {
+                if (!state.form.floor || !state.form.description) {
+                    alert('กรุณากรอก "ชั้น" และ "อธิบายปัญหา"'); return;
+                }
+                state.uploading = true;
+                let problem_image_url = null;
+
+                try {
+                    // 1. Upload image if it exists
+                    if (state.file) {
+                        const filePath = `public/${Date.now()}-${state.file.name}`;
+                        const { data: uploadData, error: uploadError } = await db.storage
+                            .from('images') // ชื่อ Bucket ที่เราสร้าง
+                            .upload(filePath, state.file);
+                        
+                        if (uploadError) throw uploadError;
+
+                        // 2. Get public URL
+                        const { data: urlData } = db.storage
+                            .from('images')
+                            .getPublicUrl(filePath);
+                        problem_image_url = urlData.publicUrl;
+                    }
+
+                    // 3. Insert ticket info into database
+                    const { data: ticketData, error: insertError } = await db
+                        .from('tickets')
+                        .insert({
+                            floor: state.form.floor,
+                            zone: state.form.zone,
+                            location_details: state.form.location_details,
+                            category: state.form.category,
+                            description: state.form.description,
+                            problem_image_url: problem_image_url
+                        })
+                        .select() // Ask Supabase to return the created data
+                        .single(); // We only expect one
+                    
+                    if (insertError) throw insertError;
+
+                    state.lastCreatedTicketId = ticketData.id;
+                    state.currentScreen = 'confirmation';
+                    
+                    // Reset form
+                    state.form = { floor: '', zone: '', location_details: '', category: 'อื่นๆ', description: '', problemImageUrl: null };
+                    state.file = null;
+                    if (document.getElementById('file-input')) document.getElementById('file-input').value = null;
+
+                } catch (error) {
+                    console.error('Error submitting ticket:', error.message);
+                    alert('เกิดข้อผิดพลาดในการส่งเรื่อง: ' + error.message);
+                } finally {
+                    state.uploading = false;
+                }
+            };
+
+            const checkStatus = async () => {
+                if (!state.trackingIdInput) return;
+                try {
+                    const { data, error } = await db
+                        .from('tickets')
+                        .select('*')
+                        .eq('id', state.trackingIdInput)
+                        .single();
+                    
+                    if (error) throw error;
+                    state.trackedTicket = data;
+                } catch (error) {
+                    state.trackedTicket = null;
+                }
+                state.currentScreen = 'statusResult';
+            };
+
+            return { state, handleImageUpload, submitTicket, checkStatus };
+        },
+        template: `
+            `
+    };
+    createApp(App).mount('#app');
+</script>
+</body>
+</html>
